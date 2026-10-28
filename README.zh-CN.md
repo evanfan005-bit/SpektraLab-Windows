@@ -2,6 +2,14 @@
 
 [English](README.md) · **简体中文**
 
+**个人迁移仓库：**[evanfan005-bit/SpektraLab-Windows](https://github.com/evanfan005-bit/SpektraLab-Windows)，
+上游为 [JamesQiu2005/SpektraLab](https://github.com/JamesQiu2005/SpektraLab)。
+默认在 `Windows_Linux` 分支开发，本地检查通过后直接推送，无需为日常开发创建 PR。
+该分支的 CI 仅通过 **Actions → Run workflow** 手动运行，普通推送不会触发。
+`main` 仅保留为上游 macOS 参考快照，不作为日常开发分支。
+初始版本汇总了上游 `Windows_Linux`（含 #13/#19）和 #14/#15/#16/#17/#20 的改动，
+保留原始提交历史、作者信息和许可证。
+
 **Windows 开发版：**本分支增加了 C++/Vulkan 后端、原生 LibRaw 解码、RGB16 TIFF 导出和 Windows 桌面界面。
 构建方法见 [Windows 说明](engine/WINDOWS.md)，已验证功能及限制见 [功能覆盖表](engine/WINDOWS_FEATURE_COVERAGE.md)。
 [Qt Quick 前端](windows_UI/README.md) 已开始复刻胶片与相纸编辑布局，同时保留[最小 Win32 窗口](engine/WINDOWS_DESKTOP.md)。

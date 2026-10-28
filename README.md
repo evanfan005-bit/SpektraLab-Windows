@@ -2,6 +2,15 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
+**Personal migration fork:** [evanfan005-bit/SpektraLab-Windows](https://github.com/evanfan005-bit/SpektraLab-Windows),
+based on [JamesQiu2005/SpektraLab](https://github.com/JamesQiu2005/SpektraLab).
+Develop and push directly on the default `Windows_Linux` branch after relevant
+local checks. Its GitHub Actions workflows run only through **Actions → Run
+workflow**; ordinary pushes do not start CI or require a PR. `main` is retained
+as an upstream macOS reference snapshot, not the development branch.
+The initial migration combines upstream `Windows_Linux` (#13/#19 included)
+with the work from #14/#15/#16/#17/#20, preserving history and licenses.
+
 **Windows development:** this branch also contains a C++/Vulkan backend,
 native LibRaw decoding, RGB16 TIFF export and Windows desktop viewers.
 See the [Windows build guide](engine/WINDOWS.md) and

@@ -9,9 +9,7 @@
 name: Build
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # Personal fork: run platform validation explicitly when needed.
   workflow_dispatch:
 
 concurrency:

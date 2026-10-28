@@ -1,5 +1,24 @@
 # AGENTS.md — working notes for AI sessions on SpektraLab
 
+## Personal fork workflow (2026-10-28)
+
+This checkout develops `evanfan005-bit/SpektraLab-Windows`. `origin` is the
+personal fork; `upstream` is `JamesQiu2005/SpektraLab`. The default development
+branch is `Windows_Linux`; `main` retains the upstream macOS reference snapshot.
+
+When the user authorizes publishing development work, push directly to the
+personal fork's `Windows_Linux`. Do not create a PR or another remote branch
+unless the work needs one or the user asks. Do not merge, close, or push to
+upstream PRs merely to publish work to this fork.
+
+Both workflows on `Windows_Linux` are manual (`workflow_dispatch`). Run local
+checks relevant to the change before publishing. Trigger hosted CI only when
+requested or needed for an explicitly authorized release/platform validation;
+do not make routine development wait for it. Report unavailable platform
+checks honestly, including macOS runtime tests on Windows. This fork-specific
+workflow takes precedence over the inherited full-platform pre-push gate below.
+Keep the inherited source, attribution, license and rendering invariants.
+
 The macOS desktop product built on the **spektrafilm** engine. Extracted from
 the `spektrafilm` fork into its own repository on 2026-09-11; current as of
 1.1.1 + main, 2026-09-26. This file records conventions and, more importantly,

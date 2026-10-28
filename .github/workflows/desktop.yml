@@ -23,9 +23,7 @@
 name: Desktop (Linux, Windows)
 
 on:
-  push:
-    branches: [main, Windows_Linux, 'claude/**']
-  pull_request:
+  # Personal fork: everyday pushes use local checks; CI is opt-in.
   workflow_dispatch:
 
 concurrency:
