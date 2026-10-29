@@ -436,6 +436,8 @@ Json m_hello(const Request&) {
     r.set("view_formats", std::move(view_formats));
     Json view_options = Json::array(); view_options.push(str("no_film"));
     r.set("view_options", std::move(view_options));
+    Json frame_options = Json::array(); frame_options.push(str("no-film"));
+    r.set("frame_options", std::move(frame_options));
     Json spaces = Json::array();
     for (const char* space : {"sRGB", "display-p3", "prophoto", "adobe-rgb", "rec2020"}) spaces.push(str(space));
     r.set("export_spaces", std::move(spaces));
@@ -1239,7 +1241,7 @@ Json m_export_frame(const Request& q, std::vector<uint8_t>* proof_payload = null
     if (cineon) { view_params.set("color_space", str("prophoto")); view_params.set("long_edge", number(0)); }
     auto req = view_request(view_params, true);
     req.cineon = cineon;
-    if (cineon) req.no_film = false; // the dedicated negative ignores the frame's bypass choice
+    if (cineon && req.no_film) throw HostError{"bad_request", "no_film cannot write a Digital Intermediate"};
     if (req.no_film && (q.params.has("pair") || q.params.at("params").at("overscan_pair").as_bool()))
         throw HostError{"bad_request", "no_film is unavailable for a half-frame pair"};
     req.output_channels = 3;
@@ -1327,7 +1329,8 @@ Json m_export_frame(const Request& q, std::vector<uint8_t>* proof_payload = null
     if (!spk::view::resume(s->handle, error))
         throw HostError{"io_error", "cannot restore editor cache: " + error};
     check_cancelled();
-    apply_snapshot(s, q.params, req.no_film);
+    // Bypass exports must not apply dormant film params to a resident editor.
+    if (!req.no_film) apply_snapshot(s, q.params);
     if (s->pair_source) {
         if (!s->pair_info.at("left").at("available").as_bool() || !s->pair_info.at("right").at("available").as_bool())
             throw HostError{"bad_request", "fill both half-frame holes with readable photographs before exporting"};

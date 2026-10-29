@@ -14,6 +14,7 @@ import {
   setPages,
   setParams,
   selectFilmStock,
+  resetFilmStock,
   toggleNoFilm,
   selectPrintStock,
   syncSettings,
@@ -205,13 +206,18 @@ function FilmSection() {
     { id: '__g' + g.title, name: g.title === 'Positive' ? t('filmGroupPositive') : g.title === 'Black & White' ? tz('Black & White', '黑白') : t('filmGroupNegative'), header: true },
     ...g.films.map((f) => ({ id: f.id, name: f.name, cine: f.use === 'cine', cover: catalog.coverURL(f.id) })),
   ]);
+  // The header's arrow and the menu item say the same thing in words (FilmSection.swift, §8.3).
+  const resetHelp = tz('Reset the film stock to Portra 400', '将胶片重置为 Portra 400');
   return (
     <Section
       id="film"
       title={t('sectionFilm')}
+      onReset={resetFilmStock}
+      resetHelp={resetHelp}
       menu={[
         { label: tz("Don't Apply Film Simulation", '不应用胶片模拟'), checked: noFilm,
-          disabled: !canBypass, onSelect: toggleNoFilm },
+          disabled: !canBypass, onSelect: toggleNoFilm, testId: 'no-film-toggle' },
+        { label: resetHelp, onSelect: resetFilmStock, divider: true },
         {
           label: t('helpUseFilmPaper'),
           disabled: !catalog.stock(film)?.targetPrint,

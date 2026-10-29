@@ -1815,7 +1815,8 @@ bool spk::view::render(spk_session* session, const Request& request, Result& res
         error = "view: unknown target space"; return false;
     }
     std::lock_guard<std::mutex> guard(session->lock);
-    const bool no_film = request.no_film && !request.cineon;
+    if (request.no_film && request.cineon) { error = "view: no_film cannot write a Digital Intermediate"; return false; }
+    const bool no_film = request.no_film;
     if (no_film && (!request.pair.is_null() || session->params.film_render.overscan.pair)) {
         error = "view: no_film is unavailable for a half-frame pair"; return false;
     }

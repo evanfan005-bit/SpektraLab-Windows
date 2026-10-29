@@ -1,3 +1,4 @@
+<!-- Historical milestone record; the 2026-10-29 PR23 integration supersedes pending CineStill and DI bypass descriptions. See desktop/docs/PR23-INTEGRATION-20261029.md. -->
 # Windows film migration: audited implementation plan
 
 Date: 2026-10-28. This document records the source audit, implementation progress and bounded validation evidence. **noFilm is implemented, with the Windows GUI/export/restart checks listed below completed on RTX 5070 Ti. Remaining GUI cases, other GPUs, Mac visual comparison and a complete release are not accepted. CineStill 800T is still proposed work.**

@@ -1,3 +1,4 @@
+<!-- Historical milestone record; the 2026-10-29 PR23 integration supersedes pending CineStill and DI bypass descriptions. See desktop/docs/PR23-INTEGRATION-20261029.md. -->
 # Windows 前端对齐 macOS 清单
 
 基准日期：2026-10-28  

@@ -78,7 +78,7 @@ export function ExportPage() {
     format: r.format, bitDepth: r.bitDepth, colorSpace: r.colorSpace, longEdge: r.longEdge,
   }), [r.format, r.bitDepth, r.colorSpace, r.longEdge]);
   const proofNoFilm = proofRecipe.format !== 'di' && sidecar.noFilm === true;
-  const bypassRefusal = !proofNoFilm ? null
+  const bypassRefusal = sidecar.noFilm && proofRecipe.format === 'di' ? tz('Enable film simulation before exporting a Digital Intermediate.', '请启用胶片模拟后再导出数字中间片。') : !proofNoFilm ? null
     : pair || (selection && isPairPath(selection)) || params.filmEdge.pair
       ? tz('Export without film simulation is unavailable for half-frame pairs. Enable film simulation.', '半格拼接不能关闭胶片模拟，请启用胶片模拟后导出。')
       : !gate.noFilm
@@ -151,7 +151,7 @@ export function ExportPage() {
           if (obsolete || !item) return;
           if ('error' in item) throw new Error(item.error);
           const result = await renderProof(recipe, item.frame, catalog, hello.methods, display ?? 'srgb', proofEdge, generation,
-            { cancelled: () => obsolete, active: (value) => { job = value; } });
+            { frameOptions: hello.frame_options, cancelled: () => obsolete, active: (value) => { job = value; } });
           if (!obsolete && generation === proofGeneration.current && result) {
             setProofResult({ path: selection, format: recipe.format, noFilm: proofNoFilm, image: result });
             setProofBusy(false); setProofStatus('');
@@ -171,7 +171,7 @@ export function ExportPage() {
   const frames = picked.length ? picked : selection ? [selection] : [];
   const writesEdits = hostWrites(hello?.methods as string[] | undefined);
   const spaceSupported = ['sRGB', 'display-p3', 'prophoto'].includes(r.colorSpace) || !!hello?.export_spaces?.includes(r.colorSpace);
-  const supported = r.format === 'di' ? gate.digitalIntermediate && !!hello?.methods?.includes('export_cineon') : writesEdits && spaceSupported && !bypassRefusal;
+  const supported = !bypassRefusal && (r.format === 'di' ? gate.digitalIntermediate && !!hello?.methods?.includes('export_cineon') : writesEdits && spaceSupported);
   const size = native ? outputFor(r, geometry, native) : null;
   const proofMessage = proofBusy
     ? proofImage ? tz('Updating export proof…', '正在更新导出软打样…') : tz('Preparing export proof…', '正在生成导出软打样…')
@@ -208,6 +208,7 @@ export function ExportPage() {
         const outcome: ExportOutcome = 'error' in item ? { kind: 'failed', message: item.error }
           : await exportFrame(recipe, item.frame, state.catalog, methods, {
             tiffOptions: state.hello?.tiff_options,
+            frameOptions: state.hello?.frame_options,
             cancelled: () => stop.current, active: (job) => { active.current = job; },
           });
         platform().log(outcome.kind === 'failed' ? 'error' : 'info', `export ${baseName(item.path)}: ${JSON.stringify(outcome)}`);
@@ -262,9 +263,9 @@ export function ExportPage() {
           <div className="rail-scroll">
             <Section
               id="exp-recipes"
-              title={tz('Export Formula', '导出方案')}
+              title={tz('Export Formula', '导出配方')}
               menu={[
-                { label: tz('Restore the built-in recipes', '恢复内置方案'), onSelect: () => { save(DEFAULT_RECIPES); setCurrent(0); } },
+                { label: tz('Restore the built-in recipes', '恢复内置配方'), onSelect: () => { save(DEFAULT_RECIPES); setCurrent(0); } },
                 {
                   label: tz('Export the print as a .cube LUT…', '将相纸导出为 .cube LUT…'),
                   onSelect: () => void exportCube(params.printStock, `${params.printStock}.cube`).catch((e) => platform().message('SpektraLab', String(e), 'error')),
@@ -279,10 +280,10 @@ export function ExportPage() {
                 ))}
               </div>
               <div className="row" style={{ justifyContent: 'flex-end', gap: 6 }}>
-                <button className="icon-btn" title={tz('Add a recipe', '添加方案')} onClick={() => save([...recipes, { ...r, id: 'r' + Date.now(), name: r.name + ' ' + tz('copy', '副本') }])}>
+                <button className="icon-btn" title={tz('Add a recipe', '新建配方')} onClick={() => save([...recipes, { ...r, id: 'r' + Date.now(), name: r.name + ' ' + tz('copy', '副本') }])}>
                   +
                 </button>
-                <button className="icon-btn" title={tz('Remove this recipe', '删除方案')} disabled={recipes.length <= 1} onClick={() => { save(recipes.filter((_, i) => i !== current)); setCurrent(0); }}>
+                <button className="icon-btn" title={tz('Remove this recipe', '删除此配方')} disabled={recipes.length <= 1} onClick={() => { save(recipes.filter((_, i) => i !== current)); setCurrent(0); }}>
                   −
                 </button>
               </div>
@@ -319,9 +320,9 @@ export function ExportPage() {
                 value={r.existing}
                 fill
                 options={[
-                  { value: 'addSuffix', label: tz('Add a number', '加编号') },
+                  { value: 'addSuffix', label: tz('Add a number', '添加后缀') },
                   { value: 'overwrite', label: tz('Overwrite', '覆盖') },
-                  { value: 'skip', label: tz('Keep (skip)', '保留（跳过）') },
+                  { value: 'skip', label: tz('Keep (skip)', '跳过') },
                 ]}
                 onChange={(v) => edit({ existing: v })}
               />
@@ -366,7 +367,7 @@ export function ExportPage() {
                     { value: 'jpeg', label: 'JPEG' },
                     { value: 'png', label: 'PNG' },
                     { value: 'tiff', label: 'TIFF' },
-                    { value: 'di', label: 'Digital Intermediate', disabled: !sessionStore.getState().gate.digitalIntermediate },
+                    { value: 'di', label: tz('Digital Intermediate', '数字中间片'), disabled: !sessionStore.getState().gate.digitalIntermediate },
                   ]}
                   onChange={(v) => edit({ format: v, bitDepth: v === 'jpeg' || v === 'png' ? 8 : r.bitDepth })}
                 />
@@ -375,8 +376,8 @@ export function ExportPage() {
                   disabled={r.format !== 'tiff'}
                   reason={tz('JPEG and PNG are 8-bit on this host.', '此处 JPEG 与 PNG 为 8 位。')}
                   options={[
-                    { value: 8, label: '8 bit' },
-                    { value: 16, label: '16 bit' },
+                    { value: 8, label: tz('8 bit', '8 位') },
+                    { value: 16, label: tz('16 bit', '16 位') },
                   ]}
                   onChange={(v) => edit({ bitDepth: v })}
                 />

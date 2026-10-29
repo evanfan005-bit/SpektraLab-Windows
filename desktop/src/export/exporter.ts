@@ -11,6 +11,7 @@ import { type DecodeSettings, type Sidecar, decodeSidecar, newSidecar } from '@s
 import { decodeWire, isRawPath } from '@shared/whiteBalance';
 import type { StockCatalog } from '@shared/stocks';
 import { latitudeRequest } from '@shared/latitude';
+import { tz } from '../i18n';
 import { host } from '../host/client';
 import { baseName, dirName, joinPath, platform } from '../platform';
 import { type ExportRecipe, extensionOf, hostFormat, resolveTarget, stem, stockToken } from './recipes';
@@ -102,14 +103,14 @@ export async function captureExportFrames(
       const sidecar = active?.sidecar ?? structuredClone(saved == null ? newSidecar() : decodeSidecar(saved));
       if (isPairPath(path)) {
         const pair = active?.pair ?? decodePair(await platform().pairLoad(path));
-        if (!pair) throw new Error('The half-frame pair recipe cannot be read.');
+        if (!pair) throw new Error(tz('The half-frame pair recipe cannot be read.', '无法读取半格拼接配方。'));
         const shots: PairInfo = {};
         for (const side of ['left', 'right'] as const) {
           const hole = pair[side];
-          if (!hole) throw new Error('Fill both half-frame holes before exporting.');
+          if (!hole) throw new Error(tz('Fill both half-frame holes before exporting.', '导出半格拼接前，请先填满两格。'));
           const known = active?.pairInfo?.[side];
           shots[side] = known ?? { ...(await host().probe(hole.path)), available: true };
-          if (!shots[side]?.available) throw new Error(shots[side]?.error ?? 'A half-frame photograph cannot be read.');
+          if (!shots[side]?.available) throw new Error(shots[side]?.error ?? tz('A half-frame photograph cannot be read.', '无法读取半格中的照片。'));
         }
         const native = sourcePairLayout(pair, { left: shots.left, right: shots.right }).size;
         const params = resolvePairParams(normalizeStockPair(sidecar.params, catalog), pair,
@@ -125,7 +126,7 @@ export async function captureExportFrames(
       }
       const info = active?.native && active.metadata !== undefined ? null : await host().probe(path);
       const native = active?.native ?? (info ? { width: info.width, height: info.height } : undefined);
-      if (!native || native.width <= 0 || native.height <= 0) throw new Error('The photograph has no usable dimensions.');
+      if (!native || native.width <= 0 || native.height <= 0) throw new Error(tz('The photograph has no usable dimensions.', '这张照片没有可用的尺寸。'));
       let params = { ...normalizeStockPair(sidecar.params, catalog) };
       const size = recalculateEffectsAfterCrop ? outputSize(sidecar.geometry, native) : native;
       const aspect = Math.max(size.width, size.height) / Math.max(1, Math.min(size.width, size.height));
@@ -213,19 +214,21 @@ export interface ExportJob {
 }
 export interface ExportControl {
   tiffOptions?: readonly string[];
+  frameOptions?: readonly string[];
   cancelled?: () => boolean;
   active?: (job: ExportJob | null) => void;
 }
 let exportSerial = 0;
 
-/** Ordinary output follows the saved display mode. DI remains a negative,
- * with film-side geometry and placement, regardless of that display choice. */
-function recipeView(r: ExportRecipe, f: FrameToExport) {
+/** Ordinary output follows the saved display mode. DI requires film simulation
+ * and uses the negative's film-side geometry and placement. */
+function recipeView(r: ExportRecipe, f: FrameToExport, control: ExportControl) {
   const di = r.format === 'di', noFilm = !di && f.noFilm;
+  if (di && f.noFilm) throw new Error('Enable film simulation before exporting a Digital Intermediate.');
   if (noFilm) {
     if (f.pair || isPairPath(f.path) || f.params.filmEdge.pair)
       throw new Error('Export without film simulation is unavailable for half-frame pairs. Enable film simulation.');
-    if (!f.gate.noFilm)
+    if (!(control.frameOptions ? control.frameOptions.includes('no-film') : f.gate.noFilm))
       throw new Error('This engine cannot export without film simulation. Update the engine or enable film simulation.');
   }
   return {
@@ -248,17 +251,17 @@ export async function exportFrame(
   const cancelled = () => control.cancelled?.() ?? false;
   try {
     if (cancelled()) return { kind: 'cancelled' };
-    const view = recipeView(r, f);
-    if (f.pair && !methods?.includes('open_pair')) throw new Error('This engine cannot export half-frame pairs. Update the engine.');
+    const view = recipeView(r, f, control);
+    if (f.pair && !methods?.includes('open_pair')) throw new Error(tz('This engine cannot export half-frame pairs. Update the engine.', '此引擎无法导出半格拼接，请更新引擎。'));
     if ((r.format === 'tiff' || r.format === 'di') &&
         ((r.tiffCompression === 'lzw' && !control.tiffOptions?.includes('lzw')) ||
          (r.format === 'tiff' && r.embedsPreview && !control.tiffOptions?.includes('preview-page'))))
-      throw new Error('This engine does not support the selected TIFF compression or preview page. Update the engine.');
+      throw new Error(tz('This engine does not support the selected TIFF compression or preview page. Update the engine.', '此引擎不支持所选的 TIFF 压缩或预览页，请更新引擎。'));
     if (r.format === 'di') {
       if (!methods?.includes('export_cineon') || !f.gate.digitalIntermediate)
-        throw new Error('This engine cannot export Cineon Digital Intermediate files.');
+        throw new Error(tz('This engine cannot export Cineon Digital Intermediate files.', '此引擎无法导出 Cineon 数字中间片文件。'));
     } else if (!hostWrites(methods)) {
-      throw new Error('This engine does not support complete frame export (export_frame). Update the engine before exporting.');
+      throw new Error(tz('This engine does not support complete frame export (export_frame). Update the engine before exporting.', '此引擎不支持完整画面导出（export_frame），请更新引擎后再导出。'));
     }
     const { dir, base } = await targetFor(r, f, catalog);
     await platform().ensureDir(dir);
@@ -278,10 +281,10 @@ export async function exportFrame(
       embed_preview: r.format === 'tiff' ? r.embedsPreview ?? false : undefined,
       color_space: r.colorSpace, long_edge: r.format === 'di' ? 0 : r.longEdge, overwrite: target.overwrite, progress_id: job.progressId,
     }, { timeoutMs: 1_800_000 });
-    if (res.payload.byteLength) throw new Error('export_frame unexpectedly returned image data.');
+    if (res.payload.byteLength) throw new Error(tz('export_frame unexpectedly returned image data.', 'export_frame 意外返回了图像数据。'));
     const { path, width, height, timings_ms } = res.result;
     if (typeof path !== 'string' || typeof width !== 'number' || typeof height !== 'number' || width <= 0 || height <= 0)
-      throw new Error('The engine returned invalid export dimensions.');
+      throw new Error(tz('The engine returned invalid export dimensions.', '引擎返回的导出尺寸无效。'));
     platform().log('info', `export (${hostFormat(r)}, ${width}x${height}) host ms: ${JSON.stringify(timings_ms ?? {})} · TOTAL ${Math.round(performance.now() - started)}`);
     return { kind: 'written', path, width, height, carriesEdits: r.format !== 'di' };
   } catch (e) {
@@ -297,11 +300,11 @@ export async function renderProof(
   recipe: ExportRecipe, frame: FrameToExport, catalog: StockCatalog, methods: readonly string[] | undefined,
   display: 'srgb' | 'display-p3', edge: number, generation: number, control: ExportControl = {},
 ) {
-  if (!methods?.includes('render_proof')) throw new Error('This engine does not support export soft proofing. Update the engine.');
-  if (recipe.format === 'di' && !methods.includes('export_cineon')) throw new Error('Cineon Digital Intermediate proofing is not available on this engine.');
+  if (!methods?.includes('render_proof')) throw new Error(tz('This engine does not support export soft proofing. Update the engine.', '此引擎不支持导出软打样，请更新引擎。'));
+  if (recipe.format === 'di' && !methods.includes('export_cineon')) throw new Error(tz('Cineon Digital Intermediate proofing is not available on this engine.', '此引擎不支持 Cineon 数字中间片软打样。'));
   const r = structuredClone(recipe), f = structuredClone(frame);
-  const view = recipeView(r, f);
-  if (f.pair && !methods.includes('open_pair')) throw new Error('This engine cannot soft-proof half-frame pairs. Update the engine.');
+  const view = recipeView(r, f, control);
+  if (f.pair && !methods.includes('open_pair')) throw new Error(tz('This engine cannot soft-proof half-frame pairs. Update the engine.', '此引擎无法对半格拼接进行软打样，请更新引擎。'));
   const job = { session: f.session ?? '', progressId: `proof-${Date.now()}-${++exportSerial}` };
   if (control.cancelled?.()) return null;
   control.active?.(job);

@@ -72,8 +72,7 @@ void exercise(const std::string& resources) {
     check(!view::render(session.get(),q,restored,e) && e.find("pair")!=std::string::npos,"native session pair bypass was accepted");
     q.cineon=true; q.no_film=false;
     view::Result di; check(view::render(session.get(),q,di,e),e);
-    q.no_film=true; check(view::render(session.get(),q,restored,e),e);
-    check(di.pixels==restored.pixels && di.preview_rgb==restored.preview_rgb,"Cineon did not ignore no-film on a pair");
+    q.no_film=true; check(!view::render(session.get(),q,restored,e) && e.find("Digital Intermediate")!=std::string::npos,"Cineon accepted no-film");
     std::puts("no-film Vulkan: independent OETF/exposure/headroom oracle, crop+rotation, film cache, edge/date/DI isolation and both native pair guards passed");
 }
 }

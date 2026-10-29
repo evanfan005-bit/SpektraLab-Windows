@@ -2189,3 +2189,13 @@ export async function boot() {
 export function _internals() {
   return { get, set };
 }
+
+/** Upstream menu actions use the native view path and its cache invalidation. */
+export const pickFilmStock = selectFilmStock;
+export const noFilmShown = (s: Pick<SessionState, 'sidecar' | 'pair'>) => s.sidecar.noFilm && !s.pair;
+export function setNoFilm(on: boolean) { if (get().sidecar.noFilm !== on) toggleNoFilm(); }
+export function resetFilmStock() {
+  if (get().batchExporting) return;
+  lastUndoAt = 0;
+  setParams((p) => ({ ...p, filmStock: 'kodak_portra_400' }));
+}

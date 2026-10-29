@@ -76,15 +76,10 @@ describe('agent saved display mode', () => {
     expect(fake.ensureDir).not.toHaveBeenCalled(); expect(fake.request).not.toHaveBeenCalled();
   });
 
-  it('retains negative geometry for DI on an old host without requiring a bypass develop', async () => {
+  it('refuses DI while bypass is saved', async () => {
     supportsNoFilm = false;
-    await workspace().call('export_image', { path, recipe: 'Digital Intermediate' });
-    const development = fake.result.mock.calls.find(([method]) => method === 'render_view')?.[1];
-    expect(development).toMatchObject({ geometry: GEOMETRY_DEFAULT, source_geometry: saved.geometry });
-    expect(development).not.toHaveProperty('no_film');
-    const [method, output] = fake.request.mock.calls[0]!;
-    expect(method).toBe('export_cineon'); expect(output).toMatchObject({ geometry: GEOMETRY_DEFAULT, source_geometry: saved.geometry });
-    expect(output).not.toHaveProperty('no_film');
+    await expect(workspace().call('export_image', { path, recipe: 'Digital Intermediate' })).rejects.toThrow('Digital Intermediate');
+    expect(fake.request).not.toHaveBeenCalled();
   });
 
   it('rejects saved bypass for a pair before trying to open it', async () => {

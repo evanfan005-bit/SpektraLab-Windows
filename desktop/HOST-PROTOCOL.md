@@ -176,6 +176,7 @@ transform's matrix and gamut step, before the curve.
 
 #### Per-frame film bypass (`no_film`, 2026-10-28)
 
+`hello.frame_options` includes `"no-film"` for export/proof.
 `hello.view_options` includes `"no_film"` when this host implements the source
 choice. A client must check that capability before promising bypass behavior;
 older hosts do not implement it. `render_view`, `export_frame` and
@@ -198,7 +199,7 @@ Bypass never populates or replaces the film-print cache and reports
 `print_cached: false`. Turning it off can reuse the existing random film result.
 A half-frame pair rejects ordinary bypass at both host and native-view
 boundaries, including private/background exports. `export_cineon` and
-`render_proof` with `format: "di"` **ignore** a boolean `no_film` value: they
+`render_proof` with `format: "di"` **reject** `no_film: true` with `bad_request`: they
 retain the negative, source-geometry and ungraded Cineon behavior below.
 
 `render_view` and `export_frame` are independently advertised by `hello.methods`.

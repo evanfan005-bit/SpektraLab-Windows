@@ -86,15 +86,12 @@ def exercise(host, root):
     report, _ = good(host, "memory_report")
     assert len(report["persistent"]["sessions"]) == 1, "private bypass leaked a session"
 
-    # The dedicated negative export ignores the saved bypass choice.
+    # Upstream R4 rejects bypass on the dedicated negative export and proof.
     cineon = dict(request, source_geometry={}, geometry={}, no_film=False, path=str(root / "di-before.tif"))
     good(host, "export_cineon", cineon)
-    good(host, "export_cineon", dict(cineon, no_film=True, path=str(root / "di-after.tif")))
-    assert tiff_pixels(root / "di-before.tif") == tiff_pixels(root / "di-after.tif")
-    di_proof = dict(cineon, format="di", proof_long_edge=64)
-    a, ap = good(host, "render_proof", di_proof)
-    b, bp = good(host, "render_proof", dict(di_proof, no_film=True))
-    assert ap == bp and a["encoding"] == b["encoding"] == "cineon"
+    for method, extra in (("export_cineon", {}), ("render_proof", {"format": "di", "proof_long_edge": 64})):
+        h, data = host.call(method, dict(cineon, no_film=True, **extra))
+        assert not h["ok"] and h["error"]["code"] == "bad_request" and not data
 
     hole = {"path": str(source), "decode": {}, "geometry": {}, "placement": {}, "autoExposure": False}
     pair = {"schemaVersion": 1, "folder": str(root), "spacingMM": 1, "turned": False, "left": hole, "right": hole}

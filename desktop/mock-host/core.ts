@@ -153,7 +153,7 @@ interface Session {
 const METHODS = [
   'hello', 'ping', 'shutdown', 'cancel', 'params_schema', 'print_lut_catalog', 'memory_report', 'probe', 'thumbnail',
   'open', 'open_pair', 'update_pair', 'redecode', 'close', 'set_params', 'get_params', 'solve', 'render', 'render_view', 'scene_latitude', 'overscan_geometry',
-  'preview_stock_lut', 'progress', 'export_image', 'export_frame', 'export_cineon', 'render_proof', 'export_cube', 'export_di',
+  'render_source', 'preview_stock_lut', 'progress', 'export_image', 'export_frame', 'export_cineon', 'render_proof', 'export_cube', 'export_di',
 ];
 
 class HostError extends Error {
@@ -258,7 +258,8 @@ export class MockHost {
 
   private noFilm(p: Record<string, unknown>, s: Session | null, cineon = false): boolean {
     if ('no_film' in p && typeof p.no_film !== 'boolean') throw new HostError('bad_request', 'no_film must be boolean');
-    const active = !cineon && p.no_film === true;
+    if (cineon && p.no_film === true) throw new HostError('bad_request', 'no_film cannot write a Digital Intermediate');
+    const active = p.no_film === true;
     if (active && !this.opts.supportsNoFilm) throw new HostError('unsupported', 'no_film is not supported by this host');
     if (active && (s?.pair || /\.spektrapair$/i.test(String(p.source_path ?? ''))))
       throw new HostError('unsupported', 'no_film is not available for half-frame pairs');
@@ -330,6 +331,7 @@ export class MockHost {
             tiff_options: ['lzw', 'preview-page'],
             thumbnail_options: ['embedded-only'],
             view_options: this.opts.supportsNoFilm ? ['no_film'] : [],
+            frame_options: this.opts.supportsNoFilm ? ['no-film'] : [],
           },
         };
       case 'ping':
@@ -524,6 +526,17 @@ export class MockHost {
           compression_simulated: false, print_cached: false,
           stats: { pixels: file.width * file.height, moved_fraction: 0, clipped_fraction: 0, outside_fraction: 0 },
           timings_ms: { print: 0, post: 0, readback: 0, total: 0 }, mock: true }, payload: view.data };
+      }
+      case 'render_source': {
+        // The decoded source, before film, grade and crop: the synthetic picture without a print.
+        const s = this.session(p);
+        const display = String(p.display ?? 'srgb');
+        if (display !== 'srgb' && display !== 'display-p3') throw new HostError('bad_request', 'display must be srgb or display-p3');
+        const le = Number(p.long_edge ?? 0);
+        const k = le > 0 ? Math.min(1, le / Math.max(s.width, s.height)) : 1;
+        const w = Math.max(1, Math.round(s.width * k)), h = Math.max(1, Math.round(s.height * k));
+        return { result: { image: { ...imageInfo(w, h), color_space: display === 'display-p3' ? 'Display P3' : 'sRGB' },
+          generation: p.generation, source: 'decoded' }, payload: paint(w, h, s.seed, null) };
       }
       case 'scene_latitude':
         return { result: latitude(this.session(p), (p.request ?? {}) as Record<string, unknown>) };

@@ -187,7 +187,7 @@ describe('export recipe proof', () => {
       bit_depth: 8 as const, stats: { pixels: 24_000_000, outside_fraction: .02, moved_fraction: .1, clipped_fraction: .003 },
       compression_simulated: false as const, print_cached: true },
   });
-  it('refuses ordinary saved bypass on an old host but keeps dedicated DI export and proof available', async () => {
+  it('refuses ordinary saved bypass on an old host and also refuses DI until film simulation is restored', async () => {
     vi.useFakeTimers();
     const sidecar = structuredClone(newSidecar()); sidecar.noFilm = true; sidecar.params.filmEdge.active = true;
     sidecar.geometry.crop = { x: .1, y: .2, width: .6, height: .7 };
@@ -201,10 +201,9 @@ describe('export recipe proof', () => {
     await act(async () => div.querySelectorAll('.recipe-list .stock-row')[3]!
       .dispatchEvent(new MouseEvent('click', { bubbles: true })));
     await act(async () => { await vi.advanceTimersByTimeAsync(210); });
-    expect((div.querySelector('[data-testid=export-run]') as HTMLButtonElement).disabled).toBe(false);
-    expect(fake.renderProof.mock.calls[0]![0]).toMatchObject({ format: 'di', geometry: { crop: { width: 1 } },
-      source_geometry: { crop: { width: .6 } } });
-    expect(fake.renderProof.mock.calls[0]![0].no_film).not.toBe(true);
+    expect((div.querySelector('[data-testid=export-run]') as HTMLButtonElement).disabled).toBe(true);
+    expect(fake.renderProof).not.toHaveBeenCalled();
+    expect(div.textContent).toContain('Enable film simulation');
   });
   it('does not display or accept a proof from the previous film mode while bypass changes', async () => {
     vi.useFakeTimers();
