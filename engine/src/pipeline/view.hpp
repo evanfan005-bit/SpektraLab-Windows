@@ -27,6 +27,9 @@ struct Request {
     uint32_t proof_long_edge = 0;
     std::string proof_display = "sRGB";
     bool cineon = false; // dedicated untagged DI: no Post-Dev or RGB output transform
+    // Per-request source choice, not an engine parameter. Cineon ignores it.
+    // The resident decode is graded/cropped normally; film caches stay intact.
+    bool no_film = false;
 };
 struct Result {
     uint32_t width = 0, height = 0, source_width = 0, source_height = 0;

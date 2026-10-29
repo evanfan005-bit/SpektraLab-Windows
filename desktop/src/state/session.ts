@@ -63,6 +63,7 @@ export interface ViewState {
 }
 
 export interface UndoEntry {
+  noFilm?: boolean;
   params: FilmParams;
   adjustments: Adjustments;
   geometry: Geometry;
@@ -363,18 +364,19 @@ export function hostViews(): boolean { return !!get().hello?.methods?.includes('
  * of the key; they can warm the display but can never satisfy engine work. */
 function cachedDisplayDescriptor(kind: 'print' | 'original', s: SessionState, tier: 'full' | 'live' = 'full'): DisplayCacheDescriptor | null {
   if (!s.selection || s.batchExporting || !s.view.fit || s.tool === 'crop' || s.pairPlacing || s.sidecar.placementNeedsFit) return null;
+  if (kind === 'print' && s.sidecar.noFilm && !s.gate.noFilm) return null;
   const canonicalDecode = (d: DecodeSettings) => modeOf(d) === 'As Shot' ? { ...d, temperature: 0, tint: 0 } : d;
   const pair = s.pair ? { ...pairSnapshotFor(s.pair, s.sidecar.params),
     left: s.pair.left ? { ...s.pair.left, decode: canonicalDecode(s.pair.left.decode) } : null,
     right: s.pair.right ? { ...s.pair.right, decode: canonicalDecode(s.pair.right.decode) } : null } : null;
   const longEdge = Math.min(Math.max(previewEdge(), s.canvasPx.width, s.canvasPx.height), s.maxTextureSize ?? 16384);
   return { kind, sources: [s.selection, ...(s.pair ? PAIR_SIDES.flatMap((side) => s.pair![side] ? [s.pair![side]!.path] : []) : [])],
-    configuration: { version: 2, decode: canonicalDecode(s.sidecar.decode), pair, display: s.displaySpace,
+    configuration: { version: 3, decode: canonicalDecode(s.sidecar.decode), pair, display: s.displaySpace,
       format: s.hello?.view_formats?.includes('rgba16') && kind === 'print' ? 'rgba16' : 'rgba8', longEdge,
       ...(kind === 'print' || pair ? { params: wireParams(s.sidecar.params) } : {}),
-      ...(kind === 'print' ? { tier, adjustments: s.sidecar.adjustments,
-        geometry: canvasGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate),
-        sourceGeometry: sourceGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate) ?? GEOMETRY_DEFAULT } : {}),
+      ...(kind === 'print' ? { tier, noFilm: s.sidecar.noFilm, adjustments: s.sidecar.adjustments,
+        geometry: canvasGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate, s.sidecar.noFilm),
+        sourceGeometry: sourceGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate, s.sidecar.noFilm) ?? GEOMETRY_DEFAULT } : {}),
     } };
 }
 function cacheDisplay(key: string | null, image: Parameters<typeof writeDisplayCache>[1], sourceSize: SessionState['nativeSize'], retain = true) {
@@ -444,8 +446,10 @@ export function noteDisplaySpace(displaySpace: 'srgb' | 'display-p3') {
 }
 
 async function renderForView(sid: string, tier: 'live' | 'full', gen: number, reprint = false) {
-  if (!hostViews()) return host().render(sid, tier, { reprint });
   const s = get();
+  if (s.sidecar.noFilm && (s.pair || !s.gate.noFilm || !hostViews()))
+    throw new Error(tz('This engine or half-frame pair cannot bypass film simulation.', '此引擎或半格拼接不支持不应用胶片模拟。'));
+  if (!hostViews()) return host().render(sid, tier, { reprint });
   if (tier === 'full' && s.pair) await flushSave();
   const descriptor = cachedDisplayDescriptor('print', s, tier);
   const keyTask = descriptor ? displayCacheKey(descriptor) : Promise.resolve(null);
@@ -455,8 +459,9 @@ async function renderForView(sid: string, tier: 'live' | 'full', gen: number, re
     tier === 'full' && !s.pair && s.selection ? displayCacheKey(cameraDescriptor(s.selection)) : null]);
   if (gen !== wantedGen || get().engineSession !== sid) throw new Error('Superseded display request');
   const image = await host().renderView(sid, tier, { adjustments: s.sidecar.adjustments,
-    geometry: s.tool === 'crop' ? GEOMETRY_DEFAULT : canvasGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate),
-    source_geometry: sourceGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate) ?? GEOMETRY_DEFAULT,
+    ...(s.sidecar.noFilm ? { no_film: true } : {}),
+    geometry: s.tool === 'crop' ? GEOMETRY_DEFAULT : canvasGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate, s.sidecar.noFilm),
+    source_geometry: sourceGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate, s.sidecar.noFilm) ?? GEOMETRY_DEFAULT,
     display: s.displaySpace, generation: gen, long_edge: viewLongEdge(s) });
   if (gen === wantedGen && get().engineSession === sid && image.pairInfo) set({ pairInfo: image.pairInfo });
   if (gen === wantedGen && get().engineSession === sid) {
@@ -487,7 +492,7 @@ function noteAsShot() {
 export async function requestPrint(): Promise<void> {
   wantedGen++;
   if (fullTimer) clearTimeout(fullTimer);
-  if (get().tool === 'crop' && geometryInNegative(get().sidecar.params, get().gate)) return;
+  if (get().tool === 'crop' && geometryInNegative(get().sidecar.params, get().gate, get().sidecar.noFilm)) return;
   if (inFlight) return;
   const sid = get().engineSession;
   if (!sid) return;
@@ -501,7 +506,7 @@ export async function requestPrint(): Promise<void> {
       resolveCurrentFilmEdge();
       const s = get();
       if (s.engineSession !== sid) return;
-      if (s.tool === 'crop' && geometryInNegative(s.sidecar.params, s.gate)) return;
+      if (s.tool === 'crop' && geometryInNegative(s.sidecar.params, s.gate, s.sidecar.noFilm)) return;
       const want = s.sidecar.params;
       if (s.pair && JSON.stringify(pairSnapshotFor(s.pair, want)) !== sentPair) {
         const snapshot = pairSnapshotFor(s.pair, want);
@@ -555,7 +560,7 @@ function scheduleFull() {
 async function renderFull(gen: number) {
   const s = get();
   const sid = s.engineSession;
-  if (!sid || inFlight || gen !== wantedGen || (s.tool === 'crop' && geometryInNegative(s.sidecar.params, s.gate))) return;
+  if (!sid || inFlight || gen !== wantedGen || (s.tool === 'crop' && geometryInNegative(s.sidecar.params, s.gate, s.sidecar.noFilm))) return;
   const native = s.nativeSize;
   // A frame no larger than the preview edge is already at its own size.
   if (native && Math.max(native.width, native.height) <= previewEdge()) {
@@ -594,14 +599,15 @@ async function refreshThumb() {
   // Request a small uncropped view from the same GPU print cache instead of
   // copying/encoding a full-resolution image in the browser.
   const img = hostViews() && s.engineSession ? await host().renderView(s.engineSession, frameImages.print.tier, {
+    ...(s.sidecar.noFilm ? { no_film: true } : {}),
     adjustments: s.sidecar.adjustments, geometry: GEOMETRY_DEFAULT,
-    source_geometry: sourceGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate) ?? GEOMETRY_DEFAULT,
+    source_geometry: sourceGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate, s.sidecar.noFilm) ?? GEOMETRY_DEFAULT,
     display: 'srgb', generation: gen, long_edge: THUMB_EDGE,
   }) : frameImages.print;
   if (gen !== wantedGen || get().selection !== s.selection) return;
   const url = await makeThumbFromPrint(img);
   if (url && gen === wantedGen && get().selection === s.selection) {
-    thumbs.setPrint(s.selection, url, !!sourceGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate));
+    thumbs.setPrint(s.selection, url, !!sourceGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate, s.sidecar.noFilm));
     set({ thumbVersion: get().thumbVersion + 1 });
   } else if (url) URL.revokeObjectURL(url);
 }
@@ -737,7 +743,7 @@ function pushUndo() {
   if (now - lastUndoAt < 500) return;
   lastUndoAt = now;
   const sc = get().sidecar;
-  const undo = [...get().undo, { params: sc.params, adjustments: sc.adjustments, geometry: sc.geometry, heldCrop: sc.heldCrop, pair: get().pair, decode: sc.decode, placementNeedsFit: sc.placementNeedsFit }].slice(-60);
+  const undo = [...get().undo, { noFilm: sc.noFilm, params: sc.params, adjustments: sc.adjustments, geometry: sc.geometry, heldCrop: sc.heldCrop, pair: get().pair, decode: sc.decode, placementNeedsFit: sc.placementNeedsFit }].slice(-60);
   set({ undo, redo: [] });
 }
 
@@ -821,7 +827,7 @@ export function setParams(fn: (p: FilmParams) => FilmParams) {
   pushUndo();
   set({ sidecar: edgeTransition(get().sidecar, next) });
   resolveCurrentFilmEdge();
-  if (sourceGeometryFor(get().sidecar.params, get().sidecar.geometry, s.gate)) set({ showingOriginal: false, comparing: false });
+  if (sourceGeometryFor(get().sidecar.params, get().sidecar.geometry, s.gate, get().sidecar.noFilm)) set({ showingOriginal: false, comparing: false });
   scheduleSave();
   void requestPrint();
 }
@@ -832,8 +838,15 @@ export function setParams(fn: (p: FilmParams) => FilmParams) {
  * Manual no-paper selection remains available until the next stock pick.
  */
 export function selectFilmStock(filmStock: string) {
+  const s = get();
+  if (s.batchExporting) return;
   // Stock picks are discrete edits, not a slider gesture to coalesce.
-  lastUndoAt = 0;
+  lastUndoAt = -Infinity;
+  if (s.sidecar.noFilm) {
+    pushUndo();
+    set({ sidecar: { ...s.sidecar, noFilm: false } });
+    discardModePreview();
+  }
   const catalog = get().catalog;
   const target = catalog.stock(filmStock)?.targetPrint;
   setParams((p) => ({ ...p, filmStock, scanFilm: catalog.isPositive(filmStock),
@@ -841,6 +854,31 @@ export function selectFilmStock(filmStock: string) {
     // repairs incompatible pairs and preserves a user's valid custom paper.
     printStock: target && catalog.stock(target) ? target : p.printStock,
   }));
+  // Re-picking the same film still exits bypass, even if its params match.
+  if (s.sidecar.noFilm) { scheduleSave(); void requestPrint(); }
+}
+
+/** The source choice is a frame edit, never a copied film parameter. */
+export function toggleNoFilm() {
+  const s = get();
+  if (!s.selection || s.batchExporting || s.pair || (!s.sidecar.noFilm && !s.gate.noFilm)) return;
+  lastUndoAt = -Infinity;
+  pushUndo();
+  set({ sidecar: { ...s.sidecar, noFilm: !s.sidecar.noFilm } });
+  discardModePreview();
+  scheduleSave();
+  void requestPrint();
+}
+
+function discardModePreview() {
+  // A film canvas may include a baked gate/crop. Never reinterpret those
+  // pixels using the bypass geometry while its replacement is in flight.
+  frameImages.print = null;
+  const s = get();
+  if (s.selection) thumbs.invalidate(s.selection);
+  clearLatitude();
+  set({ imageVersion: s.imageVersion + 1, thumbVersion: s.thumbVersion + 1, badge: null,
+    showingOriginal: false, comparing: false, view: { ...s.view, fit: true, cx: .5, cy: .5 } });
 }
 
 /** Guard the action as well as the paper row: shortcuts and future callers
@@ -966,7 +1004,9 @@ export function beginGesture() {
 function restore(e: UndoEntry) {
   const s = get();
   const decodeMoved = !jsonEqual(e.decode, s.sidecar.decode);
-  set({ pair: e.pair ?? null, sidecar: filmStageSidecar({ ...s.sidecar, params: e.params, adjustments: e.adjustments, geometry: e.geometry, heldCrop: e.heldCrop ?? null, decode: e.decode, placementNeedsFit: e.placementNeedsFit ?? false }) });
+  const noFilm = e.noFilm ?? false;
+  set({ pair: e.pair ?? null, sidecar: filmStageSidecar({ ...s.sidecar, noFilm, params: e.params, adjustments: e.adjustments, geometry: e.geometry, heldCrop: e.heldCrop ?? null, decode: e.decode, placementNeedsFit: e.placementNeedsFit ?? false }) });
+  if (noFilm !== s.sidecar.noFilm) discardModePreview();
   for (const side of PAIR_SIDES) {
     const hole = e.pair?.[side];
     if (hole && !jsonEqual(hole.decode, s.pair?.[side]?.decode))
@@ -982,7 +1022,7 @@ export function undo() {
   if (s.batchExporting || !s.selection) return;
   const prev = s.undo[s.undo.length - 1];
   if (!prev) return;
-  const cur = { params: s.sidecar.params, adjustments: s.sidecar.adjustments, geometry: s.sidecar.geometry, heldCrop: s.sidecar.heldCrop, pair: s.pair, decode: s.sidecar.decode, placementNeedsFit: s.sidecar.placementNeedsFit };
+  const cur = { noFilm: s.sidecar.noFilm, params: s.sidecar.params, adjustments: s.sidecar.adjustments, geometry: s.sidecar.geometry, heldCrop: s.sidecar.heldCrop, pair: s.pair, decode: s.sidecar.decode, placementNeedsFit: s.sidecar.placementNeedsFit };
   set({ undo: s.undo.slice(0, -1), redo: [...s.redo, cur] });
   lastUndoAt = 0;
   restore(prev);
@@ -994,7 +1034,7 @@ export function redo() {
   if (s.batchExporting || !s.selection) return;
   const next = s.redo[s.redo.length - 1];
   if (!next) return;
-  const cur = { params: s.sidecar.params, adjustments: s.sidecar.adjustments, geometry: s.sidecar.geometry, heldCrop: s.sidecar.heldCrop, pair: s.pair, decode: s.sidecar.decode, placementNeedsFit: s.sidecar.placementNeedsFit };
+  const cur = { noFilm: s.sidecar.noFilm, params: s.sidecar.params, adjustments: s.sidecar.adjustments, geometry: s.sidecar.geometry, heldCrop: s.sidecar.heldCrop, pair: s.pair, decode: s.sidecar.decode, placementNeedsFit: s.sidecar.placementNeedsFit };
   set({ redo: s.redo.slice(0, -1), undo: [...s.undo, cur] });
   lastUndoAt = 0;
   restore(next);
@@ -1022,7 +1062,7 @@ function clearLatitude() {
 
 function canMeasureLatitude(): boolean {
   const s = get();
-  return !!s.engineSession && !!s.selection && !s.batchExporting && !s.redecoding && !decodeTimer && !pairTimer && !inFlight
+  return !s.sidecar.noFilm && !!s.engineSession && !!s.selection && !s.batchExporting && !s.redecoding && !decodeTimer && !pairTimer && !inFlight
     && !(s.tool === 'crop' && geometryInNegative(s.sidecar.params, s.gate))
     && !!s.hello?.methods?.includes('scene_latitude');
 }
@@ -1069,7 +1109,7 @@ function scheduleLatitudeRefresh() {
 
 export function placementReady(): boolean {
   const s = get(), l = s.latitude;
-  return !!s.gate.sceneLatitude && !s.batchExporting && !s.redecoding && !decodeTimer
+  return !s.sidecar.noFilm && !!s.gate.sceneLatitude && !s.batchExporting && !s.redecoding && !decodeTimer
     && !(s.sidecar.params.digitalIntermediate && !s.sidecar.params.scanFilm)
     && l.session === s.engineSession && l.frame === s.selection && l.stamp === latitudeStamp(s.sidecar.params)
     && measuredFromReply(l.reply) !== null;
@@ -1418,6 +1458,7 @@ export function recomputeFilmFormat() {
 }
 
 export function setFilmFrame(id: string) {
+  if (edgeEffective(get().sidecar.params.filmEdge, get().gate)) return;
   setParams((p) => {
     const f = filmFrameNamed(id);
     const side = id === FILM_FRAME_CUSTOM.id ? p.sideLengthMM : p.filmSide === 'short' ? f.short : f.long;
@@ -1425,12 +1466,17 @@ export function setFilmFrame(id: string) {
   });
 }
 export function setFilmSide(side: FilmSide) {
+  if (edgeEffective(get().sidecar.params.filmEdge, get().gate)) return;
   setParams((p) => {
     const mm = p.filmFrame !== FILM_FRAME_CUSTOM.id ? (side === 'short' ? filmFrameNamed(p.filmFrame).short : filmFrameNamed(p.filmFrame).long) : p.sideLengthMM;
     return { ...p, filmSide: side, sideLengthMM: mm, filmFormatMM: derived(side, mm) };
   });
 }
 export function setSideLengthMM(mm: number) {
+  const s = get();
+  // The edge owns its physical gate. Keep the user's dormant format intact;
+  // a late field blur must not change it or turn a preset into Custom.
+  if (edgeEffective(s.sidecar.params.filmEdge, s.gate) || s.sidecar.params.filmFrame !== FILM_FRAME_CUSTOM.id) return;
   setParams((p) => {
     const v = clamp(mm, 1, 500);
     return { ...p, filmFrame: FILM_FRAME_CUSTOM.id, sideLengthMM: v, filmFormatMM: derived(p.filmSide, v) };
@@ -1772,7 +1818,7 @@ export function canPickNeutral(): boolean {
   const s = get();
   const side = pairFocus(s), raw = s.pair ? !!side && s.pairInfo?.[side]?.kind === 'raw' && s.pairInfo[side]?.available === true : isRawFrame();
   const sourceReady = s.pair ? !pairTimer && JSON.stringify(pairSnapshotFor(s.pair, s.sidecar.params)) === sentPair
-    : !sourceGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate);
+    : !sourceGeometryFor(s.sidecar.params, s.sidecar.geometry, s.gate, s.sidecar.noFilm);
   return sourceReady && !!s.engineSession && !!s.selection && raw && !s.batchExporting && !s.developing
     && !s.redecoding && !decodeTimer && !!s.hello?.methods?.includes('pick_neutral') && hostRedecodes(s.hello.methods);
 }
@@ -2040,12 +2086,12 @@ export function setTool(tool: Tool) {
   if (previous !== tool && (previous === 'crop' || tool === 'crop') && hostViews() && !get().batchExporting) void requestPrint();
 }
 export function setOriginal(on: boolean) {
-  if (on && sourceGeometryFor(get().sidecar.params, get().sidecar.geometry, get().gate)) return;
+  if (on && sourceGeometryFor(get().sidecar.params, get().sidecar.geometry, get().gate, get().sidecar.noFilm)) return;
   set({ showingOriginal: on });
   if (on) void refreshOriginal();
 }
 export function toggleCompare() {
-  if (sourceGeometryFor(get().sidecar.params, get().sidecar.geometry, get().gate)) return;
+  if (sourceGeometryFor(get().sidecar.params, get().sidecar.geometry, get().gate, get().sidecar.noFilm)) return;
   set({ comparing: !get().comparing });
   if (get().comparing) void refreshOriginal();
 }
@@ -2084,7 +2130,7 @@ function takeHostState(st: HostState) {
     set({
       hello: st.hello,
       unsupported,
-      gate: featureGate(unsupported, settingsStore.getState().diBlueCompensation),
+      gate: featureGate(unsupported, settingsStore.getState().diBlueCompensation, st.hello.view_options?.includes('no_film') ?? false),
     });
     queueImportPreviews();
     // A new host (first start or a restart): re-open the frame from its sidecar.

@@ -33,6 +33,8 @@ export interface Sidecar {
   params: FilmParams;
   adjustments: Adjustments;
   geometry: Geometry;
+  /** Per photograph viewing choice; never a film parameter or clipboard group. */
+  noFilm: boolean;
   /** The user's crop, restored when a film gate is switched off. */
   heldCrop?: Geometry | null;
   solvedEV?: number | null;
@@ -50,6 +52,7 @@ export function newSidecar(): Sidecar {
     params: FILM_PARAMS_DEFAULT,
     adjustments: ADJUSTMENTS_DEFAULT,
     geometry: GEOMETRY_DEFAULT,
+    noFilm: false,
     solvedEV: null,
     placementNeedsFit: false,
     state: 'unprocessed',
@@ -85,6 +88,7 @@ export function decodeSidecar(raw: unknown): Sidecar {
     params: o.params ? decodeFilmParams(o.params) : FILM_PARAMS_DEFAULT,
     adjustments: o.adjustments ? decodeAdjustments(o.adjustments) : ADJUSTMENTS_DEFAULT,
     geometry,
+    noFilm: o.noFilm === true,
     heldCrop: o.heldCrop ? decodeGeometry(o.heldCrop) : null,
     solvedEV: typeof o.solvedEV === 'number' ? o.solvedEV : null,
     placementNeedsFit: o.placementNeedsFit === true,
@@ -93,15 +97,29 @@ export function decodeSidecar(raw: unknown): Sidecar {
   };
 }
 
+/** Carry newer parameter keys without putting them on the engine wire.
+ * Current modeled values always win, including false, null and whole arrays.
+ * This is deliberately limited to params: optional geometry/state keys have
+ * explicit deletion semantics below and must not be revived from raw. */
+function preserveUnknownParams(raw: unknown, current: unknown): unknown {
+  if (!current || typeof current !== 'object' || Array.isArray(current)) return current;
+  const old = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const out: Record<string, unknown> = { ...old, ...current };
+  for (const [key, value] of Object.entries(current)) out[key] = preserveUnknownParams(old[key], value);
+  return out;
+}
+
 export function encodeSidecar(s: Sidecar): Record<string, unknown> {
   const out: Record<string, unknown> = { ...s.raw };
   delete out.crop; // legacy key, superseded by geometry
   out.schemaVersion = 3;
   out.decoder = s.decoder;
   out.decode = s.decode;
-  out.params = s.params;
+  out.params = preserveUnknownParams(s.raw.params, s.params);
   out.adjustments = s.adjustments;
   out.geometry = encodeGeometry(s.geometry);
+  if (s.noFilm) out.noFilm = true;
+  else delete out.noFilm;
   if (s.heldCrop) out.heldCrop = encodeGeometry(s.heldCrop);
   else delete out.heldCrop;
   if (s.solvedEV != null) out.solvedEV = s.solvedEV;

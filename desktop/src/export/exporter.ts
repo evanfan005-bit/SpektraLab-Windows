@@ -18,9 +18,14 @@ import { type ExportRecipe, extensionOf, hostFormat, resolveTarget, stem, stockT
 export interface FrameToExport {
   path: string;
   session?: string;
+  noFilm: boolean;
   params: FilmParams;
   adjustments: Adjustments;
   geometry: Geometry;
+  /** Dedicated Cineon exports always use the negative's framing, even when
+   * the ordinary photo preview bypasses film simulation. */
+  filmGeometry: Geometry;
+  filmSourceGeometry: Geometry;
   decode: DecodeSettings;
   gate: FeatureGate;
   native?: { width: number; height: number };
@@ -68,6 +73,17 @@ export interface SelectedExportFrame {
 
 export type PreparedExportFrame = { path: string; frame: FrameToExport } | { path: string; error: string };
 
+function snapshotGeometry(sidecar: Sidecar, params: FilmParams, gate: FeatureGate) {
+  const noFilm = sidecar.noFilm === true;
+  return {
+    noFilm,
+    geometry: canvasGeometryFor(params, sidecar.geometry, gate, noFilm),
+    sourceGeometry: sourceGeometryFor(params, sidecar.geometry, gate, noFilm) ?? GEOMETRY_DEFAULT,
+    filmGeometry: canvasGeometryFor(params, sidecar.geometry, gate),
+    filmSourceGeometry: sourceGeometryFor(params, sidecar.geometry, gate) ?? GEOMETRY_DEFAULT,
+  };
+}
+
 /** Freeze every frame before starting the batch, without opening it in the
  * editor or saving derived settings back to its sidecar. Only small metadata
  * is retained; the host opens and releases each private image in sequence. */
@@ -99,8 +115,7 @@ export async function captureExportFrames(
         const params = resolvePairParams(normalizeStockPair(sidecar.params, catalog), pair,
           shots.left?.metadata ?? null, shots.right?.metadata ?? null, catalog);
         result.push({ path, frame: structuredClone({ path, session: active?.session, params,
-          adjustments: sidecar.adjustments, geometry: canvasGeometryFor(params, sidecar.geometry, frozenGate),
-          sourceGeometry: sourceGeometryFor(params, sidecar.geometry, frozenGate) ?? GEOMETRY_DEFAULT,
+          adjustments: sidecar.adjustments, ...snapshotGeometry(sidecar, params, frozenGate),
           decode: sidecar.decode, gate: frozenGate, native, pair: pairSnapshotFor(pair, params),
           dateTaken: shots.left?.metadata?.datetime_original ?? shots.right?.metadata?.datetime_original,
           scenePlacement: sidecar.placementNeedsFit ? { ...latitudeRequest(params.sceneLatitude), region: pairFitRegion(pair, params.placementIsRight) } : undefined,
@@ -120,8 +135,7 @@ export async function captureExportFrames(
       params = resolveFilmEdgeParams(params, sidecar.geometry, active?.metadata ?? info?.metadata ?? null, catalog, native);
       result.push({ path, frame: structuredClone({
         path, session: active?.session, params, adjustments: sidecar.adjustments,
-        geometry: canvasGeometryFor(params, sidecar.geometry, frozenGate),
-        sourceGeometry: sourceGeometryFor(params, sidecar.geometry, frozenGate) ?? GEOMETRY_DEFAULT,
+        ...snapshotGeometry(sidecar, params, frozenGate),
         decode: sidecar.decode, gate: frozenGate, native,
         dateTaken: active?.dateTaken ?? info?.metadata.datetime_original,
         scenePlacement: sidecar.placementNeedsFit ? latitudeRequest(params.placementIsRight ? params.sceneLatitudeOther : params.sceneLatitude) : undefined,
@@ -204,6 +218,25 @@ export interface ExportControl {
 }
 let exportSerial = 0;
 
+/** Ordinary output follows the saved display mode. DI remains a negative,
+ * with film-side geometry and placement, regardless of that display choice. */
+function recipeView(r: ExportRecipe, f: FrameToExport) {
+  const di = r.format === 'di', noFilm = !di && f.noFilm;
+  if (noFilm) {
+    if (f.pair || isPairPath(f.path) || f.params.filmEdge.pair)
+      throw new Error('Export without film simulation is unavailable for half-frame pairs. Enable film simulation.');
+    if (!f.gate.noFilm)
+      throw new Error('This engine cannot export without film simulation. Update the engine or enable film simulation.');
+  }
+  return {
+    ...(noFilm ? { no_film: true } : {}),
+    geometry: di ? f.filmGeometry : f.geometry,
+    source_geometry: di ? f.filmSourceGeometry : f.sourceGeometry ?? GEOMETRY_DEFAULT,
+    scene_placement: noFilm ? undefined : f.scenePlacement,
+    scene_placement_side: noFilm ? undefined : f.scenePlacementSide,
+  };
+}
+
 export async function exportFrame(
   recipe: ExportRecipe, frame: FrameToExport, catalog: StockCatalog,
   methods: readonly string[] | undefined, control: ExportControl = {},
@@ -215,6 +248,7 @@ export async function exportFrame(
   const cancelled = () => control.cancelled?.() ?? false;
   try {
     if (cancelled()) return { kind: 'cancelled' };
+    const view = recipeView(r, f);
     if (f.pair && !methods?.includes('open_pair')) throw new Error('This engine cannot export half-frame pairs. Update the engine.');
     if ((r.format === 'tiff' || r.format === 'di') &&
         ((r.tiffCompression === 'lzw' && !control.tiffOptions?.includes('lzw')) ||
@@ -237,11 +271,8 @@ export async function exportFrame(
     control.active?.(job);
     const res = await host().transport.request(r.format === 'di' ? 'export_cineon' : 'export_frame', {
       session: f.session, source_path: f.path, params, decode: decode ?? undefined,
-      adjustments: f.adjustments, geometry: f.geometry,
-      source_geometry: f.sourceGeometry ?? GEOMETRY_DEFAULT,
+      adjustments: f.adjustments, ...view,
       pair: f.pair,
-      scene_placement: f.scenePlacement,
-      scene_placement_side: f.scenePlacementSide,
       path: target.path, format: hostFormat(r), quality: r.format === 'jpeg' ? r.quality : undefined,
       tiff_compression: r.format === 'tiff' || r.format === 'di' ? r.tiffCompression ?? 'none' : undefined,
       embed_preview: r.format === 'tiff' ? r.embedsPreview ?? false : undefined,
@@ -269,6 +300,7 @@ export async function renderProof(
   if (!methods?.includes('render_proof')) throw new Error('This engine does not support export soft proofing. Update the engine.');
   if (recipe.format === 'di' && !methods.includes('export_cineon')) throw new Error('Cineon Digital Intermediate proofing is not available on this engine.');
   const r = structuredClone(recipe), f = structuredClone(frame);
+  const view = recipeView(r, f);
   if (f.pair && !methods.includes('open_pair')) throw new Error('This engine cannot soft-proof half-frame pairs. Update the engine.');
   const job = { session: f.session ?? '', progressId: `proof-${Date.now()}-${++exportSerial}` };
   if (control.cancelled?.()) return null;
@@ -277,12 +309,9 @@ export async function renderProof(
     const proof = await host().renderProof({
       session: f.session, source_path: f.path, params: fullDelta(f.params, f.gate, catalog),
       decode: decodeWire(f.decode, isRawPath(f.path)) ?? undefined,
-      adjustments: f.adjustments, geometry: f.geometry, format: r.format === 'di' ? 'di' : hostFormat(r),
-      source_geometry: f.sourceGeometry ?? GEOMETRY_DEFAULT,
+      adjustments: f.adjustments, ...view, format: r.format === 'di' ? 'di' : hostFormat(r),
       pair: f.pair,
-      scene_placement: f.scenePlacement,
-      scene_placement_side: f.scenePlacementSide,
-      color_space: r.colorSpace, long_edge: r.longEdge,
+      color_space: r.colorSpace, long_edge: r.format === 'di' ? 0 : r.longEdge,
       display, proof_long_edge: Math.max(1, Math.min(4096, Math.ceil(edge))), generation, progress_id: job.progressId,
     });
     return control.cancelled?.() ? null : proof;

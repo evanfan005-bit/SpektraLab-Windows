@@ -1815,6 +1815,13 @@ bool spk::view::render(spk_session* session, const Request& request, Result& res
         error = "view: unknown target space"; return false;
     }
     std::lock_guard<std::mutex> guard(session->lock);
+    const bool no_film = request.no_film && !request.cineon;
+    if (no_film && (!request.pair.is_null() || session->params.film_render.overscan.pair)) {
+        error = "view: no_film is unavailable for a half-frame pair"; return false;
+    }
+    if (no_film && (session->params.io.input_color_space != "ProPhoto RGB" || session->params.io.input_cctf_decoding)) {
+        error = "view: no_film requires the desktop linear ProPhoto source"; return false;
+    }
     if (session->params.io.output_color_space != "ProPhoto RGB" || !session->params.io.output_cctf_encoding) {
         error = "view: the desktop postprocess requires encoded ProPhoto RGB"; return false;
     }
@@ -1833,10 +1840,23 @@ bool spk::view::render(spk_session* session, const Request& request, Result& res
     if (!tier_image(session, *tier, source, error)) return false;
     auto& state = session->tiers[tier->name];
     uint32_t full_w = 0, full_h = 0;
-    if (!session->pipeline->full_output_size(session->source.w, session->source.h, full_w, full_h, error)) return false;
-    result.print_cached = !request.cineon && state.view_print.valid();
-    Image packed_print = state.view_print;
-    if (!result.print_cached) {
+    if (no_film) { full_w = session->source.w; full_h = session->source.h; }
+    else if (!session->pipeline->full_output_size(session->source.w, session->source.h, full_w, full_h, error)) return false;
+    result.print_cached = !no_film && !request.cineon && state.view_print.valid();
+    Image packed_print;
+    if (no_film) {
+        // Film geometry, exposure and randomness do not own the decode. Encode
+        // it as float RGB: premature RGBA16 packing would clip RAW highlights
+        // before a negative Post-Dev exposure could recover them. process()
+        // shares the same grade/geometry/output path and its normal boundary.
+        packed_print.w = source.w; packed_print.h = source.h; packed_print.c = 3;
+        packed_print.buf = gpu->alloc(source.bytes(), error);
+        if (!packed_print.buf) return false;
+        const float identity[] = {1,0,0,0,1,0,0,0,1};
+        const uint32_t meta[] = {uint32_t(source.pixels()), 1}; // ProPhoto OETF
+        if (!gpu->dispatch("spk_cctf_encode_matrix", {gpu::Arg::buf(source.buf), gpu::Arg::inline_bytes(identity, 9),
+                gpu::Arg::inline_bytes(meta, 2), gpu::Arg::buf(packed_print.buf)}, source.pixels(), error) || !gpu->flush(error)) return false;
+    } else if (!result.print_cached) {
         session->pipeline->set_source_shape(source.w, source.h, session->source.w, session->source.h);
         Image negative, rgb;
         if (!negative_for(session, *tier, &session->progress, negative, error)) return false;
@@ -1860,6 +1880,7 @@ bool spk::view::render(spk_session* session, const Request& request, Result& res
         packed_print = std::move(packed);
         if (!request.cineon) state.view_print = packed_print;
     } else {
+        packed_print = state.view_print;
         MemoryEstimateTrace trace(session, "print", "hit", packed_print, 0);
         trace.success = true;
         session->progress.auto_exposure_ev = state.applied_ev;
@@ -1894,7 +1915,7 @@ bool spk::view::render(spk_session* session, const Request& request, Result& res
         return true;
     };
     gpu::BufferRef di_lut;
-    const bool di_view = session->params.io.digital_intermediate && !session->params.io.scan_film &&
+    const bool di_view = !no_film && session->params.io.digital_intermediate && !session->params.io.scan_film &&
                          !session->params.film.info.is_positive();
     if ((request.cineon || di_view) && !di_view_table(session->engine, di_lut, error)) return false;
     if (request.cineon) {
@@ -1933,7 +1954,7 @@ bool spk::view::render(spk_session* session, const Request& request, Result& res
         session->progress.done = true; return true;
     }
     bool pair_layered = false; double pair_print_ms = 0, pair_post_ms = 0;
-    if (!pair_layers(session, *tier, source, request, di_lut, packed_print, pair_layered,
+    if (!no_film && !pair_layers(session, *tier, source, request, di_lut, packed_print, pair_layered,
                      pair_print_ms, pair_post_ms, error)) return false;
     if (request.export_intent) {
         char* text = nullptr;

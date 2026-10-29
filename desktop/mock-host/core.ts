@@ -33,6 +33,8 @@ export interface MockReply {
 }
 
 export interface MockOptions {
+  /** Test both the new source-view option and conservative legacy negotiation. */
+  supportsNoFilm?: boolean;
   /** Report the real host's `unsupported_features` list (default true). */
   realisticUnsupported?: boolean;
   /** Native size of every synthetic frame. */
@@ -169,6 +171,7 @@ export class MockHost {
 
   constructor(opts: MockOptions = {}) {
     this.opts = {
+      supportsNoFilm: opts.supportsNoFilm ?? true,
       realisticUnsupported: opts.realisticUnsupported ?? true,
       nativeWidth: opts.nativeWidth ?? 3000,
       nativeHeight: opts.nativeHeight ?? 2000,
@@ -253,6 +256,15 @@ export class MockHost {
     }
   }
 
+  private noFilm(p: Record<string, unknown>, s: Session | null, cineon = false): boolean {
+    if ('no_film' in p && typeof p.no_film !== 'boolean') throw new HostError('bad_request', 'no_film must be boolean');
+    const active = !cineon && p.no_film === true;
+    if (active && !this.opts.supportsNoFilm) throw new HostError('unsupported', 'no_film is not supported by this host');
+    if (active && (s?.pair || /\.spektrapair$/i.test(String(p.source_path ?? ''))))
+      throw new HostError('unsupported', 'no_film is not available for half-frame pairs');
+    return active;
+  }
+
   private metadata(path: string) {
     const h = hash(path);
     const raw = this.kind(path) === 'raw';
@@ -317,6 +329,7 @@ export class MockHost {
             export_spaces: ['sRGB', 'display-p3', 'prophoto', 'adobe-rgb', 'rec2020'],
             tiff_options: ['lzw', 'preview-page'],
             thumbnail_options: ['embedded-only'],
+            view_options: this.opts.supportsNoFilm ? ['no_film'] : [],
           },
         };
       case 'ping':
@@ -460,30 +473,31 @@ export class MockHost {
       }
       case 'render_view': {
         const s = this.session(p);
+        const noFilm = this.noFilm(p, s);
         if (p.params) this.snapshot(s, p.params as Record<string, Value>);
-        if (p.source_geometry && JSON.stringify(p.source_geometry) !== JSON.stringify(s.sourceGeometry ?? GEOMETRY_DEFAULT)) {
+        if (!noFilm && p.source_geometry && JSON.stringify(p.source_geometry) !== JSON.stringify(s.sourceGeometry ?? GEOMETRY_DEFAULT)) {
           s.sourceGeometry = structuredClone(p.source_geometry as Geometry); s.viewPrints.clear();
         }
         const tier = String(p.tier ?? 'live');
         const display = String(p.display ?? 'srgb');
         if (display !== 'srgb' && display !== 'display-p3') throw new HostError('bad_request', 'preview display must be srgb or display-p3');
-        const cached = s.viewPrints.has(tier);
-        let print = s.viewPrints.get(tier);
+        const cached = !noFilm && s.viewPrints.has(tier);
+        let print = noFilm ? undefined : s.viewPrints.get(tier);
         if (!print) {
           const edge = Number(s.params.preview_long_edge ?? 2560) || 2560;
           const scale = tier === 'full' ? 1 : Math.min(1, edge / Math.max(s.width, s.height));
           const width = Math.max(1, Math.round(s.width * scale)), height = Math.max(1, Math.round(s.height * scale));
-          print = mockView(this.pairPixels(s, width, height), width, height, undefined,
-            s.sourceGeometry ?? GEOMETRY_DEFAULT, 'srgb', 0);
-          s.viewPrints.set(tier, print);
+          print = mockView(noFilm ? paint(width, height, s.seed, null) : this.pairPixels(s, width, height), width, height, undefined,
+            noFilm ? GEOMETRY_DEFAULT : s.sourceGeometry ?? GEOMETRY_DEFAULT, 'srgb', 0);
+          if (!noFilm) s.viewPrints.set(tier, print);
         }
         if (this.opts.renderDelayMs) await sleep(tier === 'full' ? this.opts.renderDelayMs * 3 : this.opts.renderDelayMs);
         const view = mockView(print.data, print.width, print.height, p.adjustments as Adjustments | undefined,
           p.geometry as Geometry | undefined, display, Number(p.long_edge ?? 0));
         return {
           result: { image: { ...imageInfo(view.width, view.height), color_space: display === 'display-p3' ? 'Display P3' : 'sRGB', processed: true,
-            source_width: outputSize(s.sourceGeometry ?? GEOMETRY_DEFAULT, s).width,
-            source_height: outputSize(s.sourceGeometry ?? GEOMETRY_DEFAULT, s).height },
+            source_width: outputSize(noFilm ? GEOMETRY_DEFAULT : s.sourceGeometry ?? GEOMETRY_DEFAULT, s).width,
+            source_height: outputSize(noFilm ? GEOMETRY_DEFAULT : s.sourceGeometry ?? GEOMETRY_DEFAULT, s).height },
             tier, print_cached: cached, generation: p.generation, pair_info: s.pairInfo, timings_ms: { mock_view: 5 } },
           payload: view.data,
         };
@@ -491,14 +505,15 @@ export class MockHost {
       case 'render_proof': {
         // Synthetic protocol fixture only; not a colour or gamut-stat oracle.
         const s = this.session(p);
+        const cineon = p.format === 'di';
+        const noFilm = this.noFilm(p, s, cineon);
         if (p.params) this.snapshot(s, p.params as Record<string, Value>);
         const edge = Number(p.proof_long_edge);
         if (!Number.isInteger(edge) || edge < 1 || edge > 4096) throw new HostError('bad_request', 'invalid proof size');
         const display = String(p.display ?? 'srgb');
         if (!['srgb', 'display-p3'].includes(display)) throw new HostError('bad_request', 'invalid proof display');
-        const cineon = p.format === 'di';
-        const source = mockView(paint(s.width, s.height, s.seed, s.params), s.width, s.height,
-          undefined, p.source_geometry as Geometry | undefined, 'srgb', 0);
+        const source = mockView(paint(s.width, s.height, s.seed, noFilm ? null : s.params), s.width, s.height,
+          undefined, noFilm ? GEOMETRY_DEFAULT : p.source_geometry as Geometry | undefined, 'srgb', 0);
         const file = mockView(source.data, source.width, source.height,
           cineon ? undefined : p.adjustments as Adjustments | undefined, p.geometry as Geometry | undefined, 'srgb', cineon ? 0 : Number(p.long_edge ?? 0));
         const view = mockView(file.data, file.width, file.height, undefined, GEOMETRY_DEFAULT, display, edge);
@@ -537,6 +552,7 @@ export class MockHost {
       case 'export_cineon':
       case 'export_frame': {
         const s = p.session ? this.session(p) : null;
+        const noFilm = this.noFilm(p, s, method === 'export_cineon');
         const sourcePath = s?.path ?? String(p.source_path ?? '');
         if (!sourcePath || !p.path) throw new HostError('bad_request', 'export needs source_path or session and path');
         if (this.opts.missing?.(sourcePath)) throw new HostError('not_found', `${sourcePath}: no such file`);
@@ -548,13 +564,13 @@ export class MockHost {
           if (editor) this.snapshot(editor, p.params as Record<string, Value>);
         }
         const native = s ? { width: s.width, height: s.height } : this.dims(sourcePath);
-        const cut = outputSize((p.source_geometry as Geometry | undefined) ?? GEOMETRY_DEFAULT, native);
+        const cut = outputSize(noFilm ? GEOMETRY_DEFAULT : (p.source_geometry as Geometry | undefined) ?? GEOMETRY_DEFAULT, native);
         const out = outputSize((p.geometry as Geometry | undefined) ?? GEOMETRY_DEFAULT, cut);
         const edge = method === 'export_cineon' ? 0 : Number(p.long_edge ?? 0);
         const scale = edge > 0 ? Math.min(1, edge / Math.max(out.width, out.height)) : 1;
         return { result: { path: String(p.path), width: Math.max(1, Math.round(out.width * scale)),
           height: Math.max(1, Math.round(out.height * scale)), bytes: 0, color_space: p.color_space ?? 'srgb',
-          generation: p.generation, print_cached: editor?.viewPrints.has('full') ?? false, exif_copied: true,
+          generation: p.generation, print_cached: !noFilm && (editor?.viewPrints.has('full') ?? false), exif_copied: true,
           ...(method === 'export_cineon' ? { encoding: 'cineon', primaries: 'ProPhoto RGB', view_luts: [] } : {}),
           timings_ms: { print: 0, post: 0, readback: 0, encode_write: 0, total: 0 }, mock: true } };
       }

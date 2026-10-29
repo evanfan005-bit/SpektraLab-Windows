@@ -14,6 +14,7 @@ import {
   setPages,
   setParams,
   selectFilmStock,
+  toggleNoFilm,
   selectPrintStock,
   syncSettings,
   useSession,
@@ -197,6 +198,9 @@ function ClipboardSection() {
 function FilmSection() {
   const catalog = useSession((s) => s.catalog);
   const film = useSession((s) => s.sidecar.params.filmStock);
+  const noFilm = useSession((s) => s.sidecar.noFilm);
+  const canBypass = useSession((s) => s.gate.noFilm && !s.pair && !!s.selection && !s.batchExporting);
+  const supportsBypass = useSession((s) => s.gate.noFilm);
   const rows = catalog.filmGroups().flatMap((g) => [
     { id: '__g' + g.title, name: g.title === 'Positive' ? t('filmGroupPositive') : g.title === 'Black & White' ? tz('Black & White', '黑白') : t('filmGroupNegative'), header: true },
     ...g.films.map((f) => ({ id: f.id, name: f.name, cine: f.use === 'cine', cover: catalog.coverURL(f.id) })),
@@ -206,6 +210,8 @@ function FilmSection() {
       id="film"
       title={t('sectionFilm')}
       menu={[
+        { label: tz("Don't Apply Film Simulation", '不应用胶片模拟'), checked: noFilm,
+          disabled: !canBypass, onSelect: toggleNoFilm },
         {
           label: t('helpUseFilmPaper'),
           disabled: !catalog.stock(film)?.targetPrint,
@@ -217,6 +223,9 @@ function FilmSection() {
       ]}
     >
       <StockList rows={rows} selected={film} onSelect={selectFilmStock} testId="film-list" />
+      {noFilm && <p className="caption" data-testid="no-film-state">{supportsBypass
+        ? tz('Film simulation is off. Post-processing and crop still apply.', '已关闭胶片模拟，后期调整与裁剪仍然生效。')
+        : tz('This engine cannot show this saved source view. Choose a film to restore simulation.', '当前引擎无法显示保存的无胶片视图，请选择胶片以恢复模拟。')}</p>}
     </Section>
   );
 }

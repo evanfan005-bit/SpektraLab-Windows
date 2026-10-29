@@ -120,6 +120,7 @@ export function Canvas() {
   const imageVersion = useSession((s) => s.imageVersion);
   const geometry = useSession((s) => s.sidecar.geometry);
   const params = useSession((s) => s.sidecar.params);
+  const noFilm = useSession((s) => s.sidecar.noFilm);
   const gate = useSession((s) => s.gate);
   const adjustments = useSession((s) => s.sidecar.adjustments);
   const nativeSize = useSession((s) => s.nativeSize);
@@ -139,9 +140,9 @@ export function Canvas() {
   const cropping = tool === 'crop' && !originalFallback;
   const pair = useSession((s) => s.pair), pairLayer = useSession((s) => s.pairLayer), pairPlacing = useSession((s) => s.pairPlacing), pairInfo = useSession((s) => s.pairInfo);
   const pairGates = showingOriginal && pair ? pairRects(pair) : pairCanvasRects();
-  const framing = cropping && geometryInNegative(params, gate);
-  const filmCanvas = !originalFallback && !cropping && !showingOriginal && !!sourceGeometryFor(params, geometry, gate);
-  const canvasGeometry = originalFallback ? GEOMETRY_DEFAULT : filmCanvas ? canvasGeometryFor(params, geometry, gate) : geometry;
+  const framing = cropping && geometryInNegative(params, gate, noFilm);
+  const filmCanvas = !originalFallback && !cropping && !showingOriginal && !!sourceGeometryFor(params, geometry, gate, noFilm);
+  const canvasGeometry = originalFallback ? GEOMETRY_DEFAULT : filmCanvas ? canvasGeometryFor(params, geometry, gate, noFilm) : geometry;
 
   useEffect(() => {
     if (!canvas.current) return;
