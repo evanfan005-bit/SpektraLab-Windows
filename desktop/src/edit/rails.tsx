@@ -12,7 +12,7 @@
 // does nothing is not shipped"); `ADJUST_TILES` says which and why.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { tz } from '../i18n';
+import { t, tz } from '../i18n';
 import { useStockCardPreview } from './stockCardPreview';
 import { ScrubSlider, ToggleRow, signed } from '../controls/controls';
 import {
@@ -192,6 +192,8 @@ function FilmPaper() {
   const [paperFilter, setPaperFilter] = useState<PaperFilter>('all');
   const cropped = useUi((s) => s.cardsCropped);
   const positive = catalog.isPositive(p.filmStock);
+  const noPaper = positive || p.scanFilm || p.digitalIntermediate;
+  const silverPaper = catalog.isMonochrome(p.printStock);
   const keepFilm = FILM_FILTERS.find((f) => f.id === filmFilter)!.keep;
   const keepPaper = PAPER_FILTERS.find((f) => f.id === paperFilter)!.keep;
   const films = catalog.films.filter(keepFilm);
@@ -235,6 +237,12 @@ function FilmPaper() {
           );
         })}
       </div>
+      <ToggleRow label={t('printEffects')} on={p.printEffects} disabled={!editable || noPaper}
+        reason={noPaper ? tz('Select a print profile to use paper effects.', '选择相纸后可使用相纸效果。') : undefined}
+        onChange={(v) => setParams((q) => ({ ...q, printEffects: v }))} />
+      <ToggleRow label={t('printEDR')} on={p.extendedDynamicRange} disabled={!editable || noPaper || silverPaper}
+        reason={silverPaper ? tz('EDR is not calibrated for silver paper.', '银盐相纸尚无 EDR 标定。') : t('reasonEDRDisabledInScanFilm')}
+        onChange={(v) => setParams((q) => ({ ...q, extendedDynamicRange: v }))} />
       <FilmExposure />
     </V2Section>
   );

@@ -1,0 +1,33 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// Mix the two prints in linear light by the blurred gate and film presence.
+layout(set = 0, binding = 0, std430) readonly buffer Input { float value[]; } input_data;
+layout(set = 0, binding = 3, std430) readonly buffer Count { uint value[]; } count_data;
+layout(set = 0, binding = 4, std430) readonly buffer Weight { float value[]; } weight_data;
+layout(set = 0, binding = 5, std430) readonly buffer Parameters { float v[]; } params;
+layout(set = 0, binding = 6, std430) writeonly buffer Output { float value[]; } output_data;
+#include "spk_overscan_body.glsl"
+#include "spk_edr.glsl"
+
+void main() {
+    const uint i = gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
+    if (i >= count_data.value[0]) return;
+    const uint offset = 3u * i;
+    const vec3 rgb = vec3(input_data.value[offset], input_data.value[offset + 1u], input_data.value[offset + 2u]);
+    float weight = weight_data.value[offset];
+    // A blurred plane of ones can differ from one by the blur's rounding.
+    weight = weight >= 1.0 - 1e-6 ? 1.0 : weight;
+    if (weight > 1e-6) {
+        const uint cw = uint(params.v[P_CW]);
+        weight *= film_alpha(canvas_to_film(float(i % cw), float(i / cw)));
+    }
+    vec3 result = rgb;
+    if (weight > 1e-6) {
+        const vec3 mapped = rgb * edr_scale(rgb.r, rgb.g, rgb.b);
+        result = weight >= 1.0 ? mapped : rgb + (mapped - rgb) * weight;
+    }
+    output_data.value[offset] = result.r;
+    output_data.value[offset + 1u] = result.g;
+    output_data.value[offset + 2u] = result.b;
+}

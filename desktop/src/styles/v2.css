@@ -131,6 +131,7 @@ html, body, #root { background: var(--v2-ground); }
 .v2-rail .scrub .zero { width: 1px; height: 11px; margin-top: -5.5px; background: var(--v2-dim); }
 .v2-rail .scrub .knob { width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: var(--v2-selection); box-shadow: 0 0.5px 0.8px rgba(0, 0, 0, 0.35); }
 .v2-rail .toggle-row { min-height: var(--v2-row); }
+.v2-rail .toggle-row > .row-label { white-space: normal; }
 .v2-pairs { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 16px; }
 
 /* Film & Paper: the filter capsule and the crop-to-card button over a 3 × 92 epx card grid */

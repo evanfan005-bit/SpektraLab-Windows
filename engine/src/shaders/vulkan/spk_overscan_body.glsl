@@ -1,10 +1,12 @@
 // Ported from the pinned upstream overscan.metal; parameter indices and
 // physical exposure/film/scan stages are shared with overscan.cpp.
 layout(local_size_x = 256) in;
+#if defined(SPK_OVERSCAN_CANVAS) || defined(SPK_OVERSCAN_ADD_MASK) || defined(SPK_OVERSCAN_FILM_PRESENT) || defined(SPK_OVERSCAN_LIGHT)
 layout(set=0,binding=0,std430) readonly buffer Source { float v[]; } src;
 layout(set=0,binding=1,std430) readonly buffer Parameters { float v[]; } params;
 layout(set=0,binding=2,std430) readonly buffer Count { uint v[]; } count;
 layout(set=0,binding=3,std430) buffer Destination { float v[]; } dst;
+#endif
 // overscan.metal -- RFC-032 §26-§27: the film outside the frame, as exposure.
 //
 // All three kernels read one parameter block `P` (floats; layout in
@@ -176,6 +178,14 @@ float penumbra(float d, float r) {
     return 0.5f + (u * sqrt(max(1.0f - u * u, 0.0f)) + asin(u)) * (1.0f / 3.14159265358979323846);
 }
 
+// Both the exposure and the EDR weight use the same gate for the far frame.
+float picture_gate_shift(float s) {
+    const float advance = params.v[P_PAIR_ADV];
+    return advance > 0.0f && s > params.v[P_GS0] + 0.5f * (params.v[P_GW] + advance) ? advance : 0.0f;
+}
+
+// ① + ② + the fog of ③: raw exposure on the film canvas.
+#if defined(SPK_OVERSCAN_CANVAS)
 vec3 sample_frame(float fx, float fy, uint fw, uint fh) {
     fx = clamp(fx, 0.0f, float(fw) - 1.0f);
     fy = clamp(fy, 0.0f, float(fh) - 1.0f);
@@ -191,8 +201,6 @@ vec3 sample_frame(float fx, float fy, uint fw, uint fh) {
     return mix(mix(a, b, ax), mix(c, d, ax), ay);
 }
 
-// ① + ② + the fog of ③: raw exposure on the film canvas.
-#if defined(SPK_OVERSCAN_CANVAS)
 void main() {
     const uint i = gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
     if (i >= count.v[0]) return;
@@ -202,9 +210,8 @@ void main() {
     vec3 e = vec3(0.0f);
     if (params.v[P_CARRIER] > 1.5f || (st.y >= 0.0f && st.y <= W)) {
         // A pair: past the middle of the gap, the second exposure of the same gate.
-        vec2 sg = st;
-        float shift = 0.0f;
-        if (params.v[P_PAIR_ADV] > 0.0f && st.x > params.v[P_GS0] + 0.5f * (params.v[P_GW] + params.v[P_PAIR_ADV])) { shift = params.v[P_PAIR_ADV]; sg.x -= shift; }
+        const float shift = picture_gate_shift(st.x);
+        const vec2 sg = vec2(st.x - shift, st.y);
         const float cov = penumbra(gate_sdf(sg), params.v[P_PENUMBRA]);
         if (cov > 0.0f) {
             const float px = params.v[P_PX];

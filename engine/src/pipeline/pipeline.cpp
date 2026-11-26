@@ -1020,6 +1020,31 @@ double Pipeline::scanner_blur_sigma() const {
     return params_.scanner.lens_blur;
 }
 
+double Pipeline::edr_edge_sigma() const {
+    if (!(pixel_size_um_ > 0.0)) return 0.0;
+    // macOS's picture weight follows the gate's optical spread. Add the
+    // lens, green scatter (the exponential tail has variance 2λ²), first
+    // halation bounce and scanner blur in quadrature at this render's pitch.
+    const double lens = lens_blur_sigma(), scanner = scanner_blur_sigma();
+    double variance = lens * lens + scanner * scanner;
+    const HalationParams& hal = params_.film_render.halation;
+    if (hal.active) {
+        const double pitch = pixel_size_um_;
+        if (hal.scatter_amount > 0.0) {
+            const double core = hal.scatter_core_um[1] * hal.scatter_spatial_scale / pitch;
+            const double tail = hal.scatter_tail_um[1] * hal.scatter_spatial_scale / pitch;
+            const double tail_weight = hal.scatter_tail_weight[1];
+            variance += (1.0 - tail_weight) * core * core + tail_weight * 2.0 * tail * tail;
+        }
+        if (hal.halation_amount > 0.0) {
+            const double first = hal.halation_first_sigma_um[1] * std::sqrt(hal.halation_amount) *
+                                 hal.halation_spatial_scale / pitch;
+            variance += first * first;
+        }
+    }
+    return std::sqrt(variance);
+}
+
 double Pipeline::unsharp_sigma() const {
     // Pixels at the *full tier*, scaled to this one, so the sharpening is the
     // same fraction of the frame wherever it runs. See
@@ -1780,8 +1805,33 @@ bool Pipeline::node_edr(const Image& in, Image& out, std::string& error) {
     if (!params_.print_render.edr_enabled || params_.io.scan_film) { out = in; return true; }
     Timer t(this, "scanning.edr");
     if (!baked_.edr_params || !baked_.edr_lut) { error = "EDR calibration is not available"; return false; }
-    if (!alloc_like(in, out, error)) return false;
     const uint32_t n[1] = {uint32_t(in.pixels())};
+    if (overscan_wanted()) {
+        if (!overscan_.valid || in.w != overscan_.canvas_w || in.h != overscan_.canvas_h) {
+            error = "overscan: the print does not match this pipeline's overscan layout";
+            return false;
+        }
+        // Blur the exposure coverage before applying film presence. The
+        // scanner lays the perforations over that same optical blur.
+        std::vector<float> geometry;
+        overscan_params_block(geometry);
+        auto film = gpu_->upload(geometry.data(), geometry.size() * sizeof(float), error);
+        Image coverage, weight;
+        if (!film || !alloc_like(in, coverage, error)) return false;
+        if (!gpu_->dispatch("spk_overscan_picture_weight",
+                            {gpu::Arg::buf(film), gpu::Arg::inline_bytes(n, 1), gpu::Arg::buf(coverage.buf)},
+                            in.pixels(), error)) return false;
+        double sigma[3];
+        fill3(sigma, edr_edge_sigma());
+        if (!blur_.gaussian_consume(std::move(coverage), sigma, weight, error) || !alloc_like(in, out, error))
+            return false;
+        return gpu_->dispatch("spk_edr_weighted",
+                              {gpu::Arg::buf(in.buf), gpu::Arg::buf(baked_.edr_params),
+                               gpu::Arg::buf(baked_.edr_lut), gpu::Arg::inline_bytes(n, 1),
+                               gpu::Arg::buf(weight.buf), gpu::Arg::buf(film), gpu::Arg::buf(out.buf)},
+                              in.pixels(), error);
+    }
+    if (!alloc_like(in, out, error)) return false;
     return gpu_->dispatch("spk_edr",
                           {gpu::Arg::buf(in.buf), gpu::Arg::buf(baked_.edr_params),
                            gpu::Arg::buf(baked_.edr_lut), gpu::Arg::inline_bytes(n, 1),

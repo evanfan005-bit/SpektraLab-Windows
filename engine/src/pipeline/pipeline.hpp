@@ -643,6 +643,7 @@ private:
     double lens_blur_sigma() const;
     double scanner_blur_sigma() const;
     double unsharp_sigma() const;
+    double edr_edge_sigma() const;
     /// `source_long_edge_ / frame_long_edge_`: the full tier's long edge over
     /// this render's, which is what turns a parameter stated as a fraction of
     /// the frame into this frame's pixels.

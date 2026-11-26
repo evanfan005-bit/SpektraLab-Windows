@@ -95,6 +95,27 @@ test('open → developing → done: the status line follows the scheduler, and t
   expect(await state(page, 's.job.state')).toBe('done');
 });
 
+test('Develop paper controls preserve EDR when changing the viewing stage', async ({ page }) => {
+  await open(page);
+  const filmPaper = page.getByTestId('section-filmPaper');
+  const edr = filmPaper.getByRole('switch', { name: 'Extended Dynamic Range (EDR)' });
+  const effects = filmPaper.getByRole('switch', { name: 'Print Effects' });
+  await expect(edr).toHaveAttribute('aria-checked', 'false');
+  await edr.click();
+  await effects.click();
+  await expect(edr).toHaveAttribute('aria-checked', 'true');
+  await expect(effects).toHaveAttribute('aria-checked', 'false');
+
+  const papers = filmPaper.getByTestId('paper-cards');
+  await papers.getByRole('option', { name: 'No paper', exact: true }).click();
+  await expect(edr).toBeDisabled();
+  await expect(effects).toBeDisabled();
+  await papers.locator('[data-stock="kodak_supra_endura"]').click();
+  await expect(edr).toBeEnabled();
+  await expect(edr).toHaveAttribute('aria-checked', 'true');
+  expect(await state(page, 's.sidecar.params.printEffects')).toBe(false);
+});
+
 test('a failed develop keeps the last print and offers Try Again, which develops it', async ({ page }) => {
   await open(page);
   await page.evaluate(() => (globalThis as unknown as { __spkMock: { failNextRenders(n: number): void } }).__spkMock.failNextRenders(1));

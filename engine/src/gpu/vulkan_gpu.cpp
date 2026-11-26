@@ -116,6 +116,7 @@ constexpr KernelSpec kKernels[] = {
     {"spk_highlight_headroom", 4, kWorkgroup},
     {"spk_bw_correct", 4, kWorkgroup},
     {"spk_edr", 5, kWorkgroup},
+    {"spk_edr_weighted", 7, kWorkgroup},
     {"spk_cctf_decode", 3, kWorkgroup},
     {"spk_zoom_bilinear_mirror", 3, kWorkgroup},
     {"spk_geometry_resample_df", 4, kWorkgroup},
@@ -127,6 +128,7 @@ constexpr KernelSpec kKernels[] = {
     {"spk_overscan_add_mask", 4, kWorkgroup},
     {"spk_overscan_film_present", 4, kWorkgroup},
     {"spk_overscan_light", 4, kWorkgroup},
+    {"spk_overscan_picture_weight", 3, kWorkgroup},
     {"spk_view_pair", 6, kWorkgroup},
 };
 

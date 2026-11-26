@@ -1,0 +1,23 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// The film canvas's exposure coverage, in three channels for the optical blur.
+layout(set = 0, binding = 0, std430) readonly buffer Parameters { float v[]; } params;
+layout(set = 0, binding = 1, std430) readonly buffer Count { uint value[]; } count_data;
+layout(set = 0, binding = 2, std430) writeonly buffer Weight { float value[]; } weight_data;
+#include "spk_overscan_body.glsl"
+
+void main() {
+    const uint i = gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
+    if (i >= count_data.value[0]) return;
+    const uint cw = uint(params.v[P_CW]);
+    const vec2 st = canvas_to_film(float(i % cw), float(i / cw));
+    float coverage = 0.0;
+    if (params.v[P_CARRIER] > 1.5 || (st.y >= 0.0 && st.y <= params.v[P_FILM_W])) {
+        const vec2 sg = vec2(st.x - picture_gate_shift(st.x), st.y);
+        coverage = penumbra(gate_sdf(sg), params.v[P_PENUMBRA]);
+    }
+    weight_data.value[3u * i] = coverage;
+    weight_data.value[3u * i + 1u] = coverage;
+    weight_data.value[3u * i + 2u] = coverage;
+}
